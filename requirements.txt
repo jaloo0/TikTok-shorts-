@@ -1,5 +1,5 @@
 yt-dlp>=2024.3.10
-openai-whisper>=20231117
-moviepy>=1.0.3
 requests>=2.31.0
-torch
+openai-whisper>=20231117
+# Optional faster backend; if installed, pipeline.py prefers it:
+# faster-whisper>=1.0.0

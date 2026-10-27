@@ -9,23 +9,42 @@ st.title("🎬 Master Automated Shorts Pipeline Studio")
 st.markdown("Full control center: GitHub Auto-Config, Recursive Repo File Editor, OpenRouter Free Models Integration, and Live Workflow Error Logger.")
 
 # ==========================================
-# 🔑 SIDEBAR: GITHUB & OPENROUTER CONFIG
+# 🔑 INITIALIZE SESSION STATE FOR PERSISTENCE
 # ==========================================
-st.sidebar.header("⚙️ Credentials & API Config")
-
-# GitHub Config
-github_token = st.sidebar.text_input("GitHub PAT", type="password", help="Needs 'repo' scope")
-
+if "github_token" not in st.session_state:
+    st.session_state.github_token = ""
+if "openrouter_key" not in st.session_state:
+    st.session_state.openrouter_key = ""
 if "owner" not in st.session_state:
     st.session_state.owner = ""
 if "repos" not in st.session_state:
     st.session_state.repos = []
 if "default_branch" not in st.session_state:
     st.session_state.default_branch = "main"
+if "active_run_id" not in st.session_state:
+    st.session_state.active_run_id = None
+if "active_run_status" not in st.session_state:
+    st.session_state.active_run_status = None
+if "active_run_conclusion" not in st.session_state:
+    st.session_state.active_run_conclusion = None
+if "ai_generated_code" not in st.session_state:
+    st.session_state.ai_generated_code = ""
+if "last_selected_ai_file" not in st.session_state:
+    st.session_state.last_selected_ai_file = ""
 
-if github_token:
+# ==========================================
+# ⚙️ SIDEBAR: GITHUB & OPENROUTER CONFIG
+# ==========================================
+st.sidebar.header("⚙️ Credentials & API Config")
+
+# Persistent GitHub PAT Input
+github_token = st.sidebar.text_input("GitHub PAT", value=st.session_state.github_token, type="password", help="Needs 'repo' scope", key="gh_token_input")
+if github_token != st.session_state.github_token:
+    st.session_state.github_token = github_token
+
+if st.session_state.github_token:
     gh_headers = {
-        "Authorization": f"Bearer {github_token}",
+        "Authorization": f"Bearer {st.session_state.github_token}",
         "Accept": "application/vnd.github+json"
     }
     try:
@@ -44,7 +63,7 @@ if github_token:
 selected_repo = st.sidebar.selectbox("Select Repository", options=st.session_state.repos if st.session_state.repos else ["Enter token first..."])
 
 workflow_file = "video_pipeline.yml"
-if github_token and st.session_state.owner and selected_repo and selected_repo != "Enter token first...":
+if st.session_state.github_token and st.session_state.owner and selected_repo and selected_repo != "Enter token first...":
     repo_info_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}", headers=gh_headers)
     if repo_info_res.status_code == 200:
         st.session_state.default_branch = repo_info_res.json().get("default_branch", "main")
@@ -58,18 +77,20 @@ if github_token and st.session_state.owner and selected_repo and selected_repo !
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🤖 OpenRouter AI Config")
-openrouter_key = st.sidebar.text_input("OpenRouter API Key", type="password", help="Get free model access via openrouter.ai")
 
-# Auto-list free models from OpenRouter API
+# Persistent OpenRouter Key Input
+openrouter_key = st.sidebar.text_input("OpenRouter API Key", value=st.session_state.openrouter_key, type="password", help="Get free model access via openrouter.ai", key="or_key_input")
+if openrouter_key != st.session_state.openrouter_key:
+    st.session_state.openrouter_key = openrouter_key
+
 free_models = ["openai/gpt-4o-mini", "anthropic/claude-3-haiku"]
 selected_openrouter_model = st.sidebar.selectbox("Select AI Model", options=["Enter OpenRouter Key..."])
 
-if openrouter_key:
+if st.session_state.openrouter_key:
     try:
         or_res = requests.get("https://openrouter.ai/api/v1/models")
         if or_res.status_code == 200:
             all_models = or_res.json().get("data", [])
-            # Filter free models where pricing prompt & completion are 0
             free_models = []
             for m in all_models:
                 pricing = m.get("pricing", {})
@@ -78,7 +99,7 @@ if openrouter_key:
                 if p_prompt == 0.0 and p_compl == 0.0:
                     free_models.append(m.get("id"))
             if not free_models:
-                free_models = [m.get("id") for m in all_models[:10]] # fallback
+                free_models = [m.get("id") for m in all_models[:10]]
             selected_openrouter_model = st.sidebar.selectbox("Select Free OpenRouter Model", options=free_models)
         else:
             st.sidebar.error("Failed to fetch OpenRouter models.")
@@ -104,13 +125,13 @@ with tab_run:
         st.markdown(f"**Active AI Model:** `{selected_openrouter_model}`")
 
     if st.button("🚀 Run Pipeline on GitHub Actions", type="primary"):
-        if not github_token or not st.session_state.owner or not selected_repo:
+        if not st.session_state.github_token or not st.session_state.owner or not selected_repo:
             st.error("Please configure GitHub credentials in the sidebar.")
         elif not video_url:
             st.error("Please provide a video URL.")
         else:
             gh_headers = {
-                "Authorization": f"Bearer {github_token}",
+                "Authorization": f"Bearer {st.session_state.github_token}",
                 "Accept": "application/vnd.github+json"
             }
             dispatch_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/workflows/{workflow_file}/dispatches"
@@ -126,8 +147,7 @@ with tab_run:
                 response = requests.post(dispatch_url, headers=gh_headers, json=payload)
                 
             if response.status_code == 204:
-                st.success("Pipeline triggered successfully! Monitoring execution...")
-                
+                st.success("Pipeline triggered successfully! Locating Run ID...")
                 runs_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/workflows/{workflow_file}/runs?per_page=1"
                 run_id = None
                 for _ in range(10):
@@ -139,56 +159,74 @@ with tab_run:
                         break
                 
                 if run_id:
-                    st.info(f"Monitoring Run ID: `{run_id}`")
-                    status_placeholder = st.empty()
-                    
-                    while True:
-                        time.sleep(5)
-                        run_status_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{run_id}", headers=gh_headers).json()
-                        status = run_status_res.get("status")
-                        conclusion = run_status_res.get("conclusion")
-                        
-                        status_placeholder.markdown(f"**Status:** `{status}` | **Conclusion:** `{conclusion}`")
-                        
-                        if status == "completed":
-                            if conclusion == "success":
-                                st.success("🎉 Pipeline completed successfully!")
-                                artifacts_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{run_id}/artifacts", headers=gh_headers).json()
-                                artifacts = artifacts_res.get("artifacts", [])
-                                if artifacts:
-                                    download_url = artifacts[0]["archive_download_url"]
-                                    st.markdown(f"📥 [Download Generated Short Artifact (.zip)]({download_url})")
-                            else:
-                                st.error(f"❌ Pipeline failed with conclusion: `{conclusion}`")
-                                
-                                # 🛑 AUTOMATIC WORKFLOW ERROR LOG FETCHER
-                                st.subheader("📋 Workflow Error Logs & Diagnostics")
-                                jobs_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{run_id}/jobs", headers=gh_headers)
-                                if jobs_res.status_code == 200:
-                                    jobs = jobs_res.json().get("jobs", [])
-                                    for job in jobs:
-                                        job_id = job.get("id")
-                                        job_name = job.get("name")
-                                        logs_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/jobs/{job_id}/logs", headers=gh_headers)
-                                        if logs_res.status_code == 200:
-                                            with st.expander(f"Logs for Job: {job_name}", expanded=True):
-                                                st.code(logs_res.text[-5000:], language="log")
-                        break
+                    st.session_state.active_run_id = run_id
+                    st.session_state.active_run_status = "in_progress"
+                    st.session_state.active_run_conclusion = None
+                    st.rerun()
                 else:
                     st.warning("Dispatched, but could not retrieve Run ID automatically.")
             else:
                 st.error(f"Failed to dispatch: {response.status_code} - {response.text}")
+
+    # Persistent Pipeline Monitor View
+    if st.session_state.active_run_id:
+        st.markdown("---")
+        st.subheader(f"🔄 Active Pipeline Monitoring (Run ID: `{st.session_state.active_run_id}`)")
+        
+        gh_headers = {
+            "Authorization": f"Bearer {st.session_state.github_token}",
+            "Accept": "application/vnd.github+json"
+        }
+        run_status_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{st.session_state.active_run_id}", headers=gh_headers)
+        
+        if run_status_res.status_code == 200:
+            run_data = run_status_res.json()
+            status = run_data.get("status")
+            conclusion = run_data.get("conclusion")
+            
+            st.markdown(f"**Status:** `{status}` | **Conclusion:** `{conclusion}`")
+            
+            if status == "completed":
+                if conclusion == "success":
+                    st.success("🎉 Pipeline completed successfully!")
+                    artifacts_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{st.session_state.active_run_id}/artifacts", headers=gh_headers).json()
+                    artifacts = artifacts_res.get("artifacts", [])
+                    if artifacts:
+                        download_url = artifacts[0]["archive_download_url"]
+                        st.markdown(f"📥 [Download Generated Short Artifact (.zip)]({download_url})")
+                else:
+                    st.error(f"❌ Pipeline failed with conclusion: `{conclusion}`")
+                    
+                    st.subheader("📋 Workflow Error Logs & Diagnostics")
+                    jobs_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/runs/{st.session_state.active_run_id}/jobs", headers=gh_headers)
+                    if jobs_res.status_code == 200:
+                        jobs = jobs_res.json().get("jobs", [])
+                        for job in jobs:
+                            job_id = job.get("id")
+                            job_name = job.get("name")
+                            logs_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/actions/jobs/{job_id}/logs", headers=gh_headers)
+                            if logs_res.status_code == 200:
+                                with st.expander(f"Logs for Job: {job_name}", expanded=True):
+                                    st.code(logs_res.text[-5000:], language="log")
+                
+                if st.button("Clear Finished Run Monitor"):
+                    st.session_state.active_run_id = None
+                    st.rerun()
+            else:
+                if st.button("🔄 Refresh Run Status"):
+                    st.rerun()
+                st.info("Pipeline is running in background. You can switch tabs safely; click Refresh anytime to check status.")
 
 # ------------------------------------------
 # TAB 2: REPOSITORY FILE EDITOR
 # ------------------------------------------
 with tab_edit:
     st.subheader("Recursive Repository File Explorer & Editor")
-    if not github_token or not st.session_state.owner or not selected_repo or selected_repo == "Enter token first...":
+    if not st.session_state.github_token or not st.session_state.owner or not selected_repo or selected_repo == "Enter token first...":
         st.warning("⚠️ Enter GitHub credentials in the sidebar first.")
     else:
         gh_headers = {
-            "Authorization": f"Bearer {github_token}",
+            "Authorization": f"Bearer {st.session_state.github_token}",
             "Accept": "application/vnd.github+json"
         }
         tree_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/git/trees/{st.session_state.default_branch}?recursive=1"
@@ -232,17 +270,16 @@ with tab_edit:
 # ------------------------------------------
 with tab_ai:
     st.subheader("💬 OpenRouter AI Assistant & Direct Code Patter")
-    st.markdown("Let OpenRouter AI modify your code line-by-line, review the changes, and commit/push directly to your repository.")
+    st.markdown("Let OpenRouter AI modify your code line-by-line, review exact changes, and commit/push directly to your repository.")
     
-    if not github_token or not st.session_state.owner or not selected_repo or selected_repo == "Enter token first...":
+    if not st.session_state.github_token or not st.session_state.owner or not selected_repo or selected_repo == "Enter token first...":
         st.warning("⚠️ Please configure your GitHub credentials in the sidebar first.")
     else:
         gh_headers = {
-            "Authorization": f"Bearer {github_token}",
+            "Authorization": f"Bearer {st.session_state.github_token}",
             "Accept": "application/vnd.github+json"
         }
         
-        # Fetch repository file tree for target file selection
         tree_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/git/trees/{st.session_state.default_branch}?recursive=1"
         tree_res = requests.get(tree_url, headers=gh_headers)
         
@@ -262,21 +299,22 @@ with tab_ai:
                         file_content = base64.b64decode(f_data["content"]).decode("utf-8")
                     except:
                         file_content = "[Binary file]"
+
+            # Reset or populate editor state cleanly when switching target files
+            if st.session_state.last_selected_ai_file != target_file:
+                st.session_state.last_selected_ai_file = target_file
+                st.session_state.ai_generated_code = file_content
             
             ai_prompt = st.text_area("🤖 AI Instructions / Bug Fix Request", placeholder="e.g., Fix the moviepy import error, update requirements, or optimize fetch_video...")
             
-            # Initialize session state for AI-generated code preview
-            if "ai_generated_code" not in st.session_state:
-                st.session_state.ai_generated_code = file_content
-            
             if st.button("✨ Generate AI Code Modification", type="primary"):
-                if not openrouter_key:
+                if not st.session_state.openrouter_key:
                     st.error("Please enter your OpenRouter API Key in the sidebar.")
                 elif not ai_prompt:
                     st.error("Please enter instructions for the AI.")
                 else:
                     headers = {
-                        "Authorization": f"Bearer {openrouter_key}",
+                        "Authorization": f"Bearer {st.session_state.openrouter_key}",
                         "Content-Type": "application/json"
                     }
                     system_instruction = (
@@ -298,7 +336,6 @@ with tab_ai:
                         if res.status_code == 200:
                             raw_ans = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
                             
-                            # Clean up markdown code blocks if wrapped by the LLM
                             cleaned_code = raw_ans.strip()
                             if cleaned_code.startswith("```"):
                                 lines = cleaned_code.splitlines()
@@ -310,14 +347,12 @@ with tab_ai:
                                     cleaned_code = "\n".join(lines)
                             
                             st.session_state.ai_generated_code = cleaned_code
-                            st.success("AI code generation complete! Review, tweak line-by-line below, and push when ready.")
-                            st.rerun()
+                            st.success("AI code generation complete! Review the updated code below.")
                         else:
                             st.error(f"OpenRouter API Error: {res.status_code} - {res.text}")
             
-            # Interactive Review & Line-to-Line Code Editor Box
             st.markdown("---")
-            st.markdown("### 📝 Code Review & Line-to-Line Editor")
+            st.markdown(f"### 📝 Code Review & Line-to-Line Editor (`{target_file}`)")
             reviewed_code = st.text_area("Modify code line-by-line before committing:", value=st.session_state.ai_generated_code, height=450, key="reviewed_ai_code_box")
             
             commit_msg_ai = st.text_input("Commit Message", value=f"AI update to {target_file} via OpenRouter Studio")

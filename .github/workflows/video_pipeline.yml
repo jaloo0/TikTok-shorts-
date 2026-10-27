@@ -7,6 +7,10 @@ on:
         description: 'Video URL to process'
         required: true
         default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+      openrouter_model:
+        description: 'OpenRouter AI Model to use for humor/transcript analysis'
+        required: false
+        default: 'openai/gpt-4o-mini'
 
 jobs:
   run-pipeline:

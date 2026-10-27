@@ -16,6 +16,12 @@ if "github_token" not in st.session_state:
     st.session_state.github_token = ""
 if "openrouter_key" not in st.session_state:
     st.session_state.openrouter_key = ""
+if "gemini_key" not in st.session_state:
+    st.session_state.gemini_key = ""
+if "gemini_model" not in st.session_state:
+    st.session_state.gemini_model = "gemini-2.5-flash"
+if "use_gemini" not in st.session_state:
+    st.session_state.use_gemini = False
 if "owner" not in st.session_state:
     st.session_state.owner = ""
 if "repos" not in st.session_state:
@@ -111,6 +117,25 @@ if st.session_state.openrouter_key:
 else:
     st.sidebar.caption("Enter an OpenRouter key to load available models.")
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("🡇 Gemini AI Config")
+use_gemini = st.sidebar.checkbox("Enable Gemini Clip Selection", value=st.session_state.use_gemini, key="use_gemini_checkbox")
+if use_gemini != st.session_state.use_gemini:
+    st.session_state.use_gemini = use_gemini
+
+gemini_key = st.sidebar.text_input("Gemini API Key", value=st.session_state.gemini_key, type="password", help="Used for alternative clip selection via Google Gemini.", key="gemini_key_input")
+if gemini_key != st.session_state.gemini_key:
+    st.session_state.gemini_key = gemini_key
+
+gemini_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+try:
+    gemini_index = gemini_models.index(st.session_state.gemini_model)
+except ValueError:
+    gemini_index = 0
+selected_gemini_model = st.sidebar.selectbox("Select Gemini Model", options=gemini_models, index=gemini_index, key="gemini_model_select")
+if selected_gemini_model != st.session_state.gemini_model:
+    st.session_state.gemini_model = selected_gemini_model
+
 # ==========================================
 # 📑 TABS: RUNNER, REPO EDITOR, OPENROUTER AI
 # ==========================================
@@ -145,8 +170,8 @@ with tab_run:
                 "inputs": {
                     "video_url": video_url,
                     "openrouter_model": selected_openrouter_model if use_ai_humor else "none",
-                    "use_gemini": False,
-                    "gemini_model": "none"
+                    "use_gemini": st.session_state.use_gemini,
+                    "gemini_model": st.session_state.gemini_model if st.session_state.use_gemini else "none"
                 }
             }
             
@@ -316,11 +341,11 @@ with tab_ai:
                         "You are an autonomous senior software engineer. The user will give you a task. "
                         "Examine the provided repository files, determine which one or more files need to be created or modified, "
                         "and output your solution strictly as a JSON object where each key is the relative file path and the value is the complete updated file content string. "
-                        "Example format:\n{\n  \"pipeline.py\": \"import os...\",\n  \"requirements.txt\": \"yt-dlp\\n...\"\n}\n"
+                        "Example format:\\n{\\n  \\"pipeline.py\\": \\"import os...\\",\\n  \\"requirements.txt\\": \\"yt-dlp\\\\n...\\"\\n}\\n"
                         "Return ONLY valid JSON containing the modified or new files. Do not include markdown chat outside the JSON structure."
                     )
                     
-                    user_payload = f"User Request: {ai_prompt}\n\nRepository Files Context:\n{json.dumps(codebase_context, indent=2)}"
+                    user_payload = f"User Request: {ai_prompt}\\n\\nRepository Files Context:\\n{json.dumps(codebase_context, indent=2)}"
                     
                     headers = {
                         "Authorization": f"Bearer {st.session_state.openrouter_key}",
@@ -346,7 +371,7 @@ with tab_ai:
                                     lines = lines[1:-1]
                                 else:
                                     lines = lines[1:]
-                                raw_ans = "\n".join(lines)
+                                raw_ans = "\\n".join(lines)
                         
                         try:
                             parsed_files = json.loads(raw_ans)
@@ -363,7 +388,7 @@ with tab_ai:
                             else:
                                 st.error("AI response JSON format was invalid. Please try again.")
                         except json.JSONDecodeError:
-                            st.error(f"Failed to parse AI JSON output:\n{raw_ans}")
+                            st.error(f"Failed to parse AI JSON output:\\n{raw_ans}")
                     else:
                         st.error(f"OpenRouter API Error: {res.status_code} - {res.text}")
 

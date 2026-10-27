@@ -232,26 +232,61 @@ with tab_edit:
 # ------------------------------------------
 with tab_ai:
     st.subheader("💬 OpenRouter AI Script & Prompt Assistant")
-    st.markdown("Test prompts, write code snippets, or analyze transcript humor using your selected OpenRouter free model.")
+    st.markdown("Analyze code, troubleshoot errors, or generate script logic using your repository context and selected OpenRouter free model.")
     
-    prompt = st.text_area("Ask OpenRouter AI or paste transcript snippet:", placeholder="Write python logic for finding funny moments...")
-    if st.button("Generate AI Response"):
+    # Context inclusion toggle
+    include_repo_context = st.checkbox("Inject current repository files as context (pipeline.py, requirements, workflow)", value=True)
+    
+    repo_context_str = ""
+    if include_repo_context and github_token and st.session_state.owner and selected_repo and selected_repo != "Enter token first...":
+        gh_headers = {
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/vnd.github+json"
+        }
+        # Fetch key files automatically to build context
+        key_files = ["pipeline.py", "video_pipeline.yml", "requirements.txt", "requirements (1).txt", "pipeline (1).py"]
+        for f_path in key_files:
+            try:
+                f_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/contents/{f_path}", headers=gh_headers)
+                if f_res.status_code == 200:
+                    file_json = f_res.json()
+                    decoded_content = base64.b64decode(file_json["content"]).decode("utf-8")
+                    repo_context_str += f"\n\n--- FILE: {f_path} ---\n{decoded_content}"
+            except Exception:
+                pass
+
+    prompt = st.text_area("Ask OpenRouter AI or paste error logs / questions:", placeholder="e.g., Fix the moviepy import error in pipeline.py or add a feature...")
+    
+    if st.button("Generate AI Response with Context"):
         if not openrouter_key:
             st.error("Please enter your OpenRouter API Key in the sidebar.")
+        elif not prompt:
+            st.error("Please enter a prompt or question.")
         else:
             headers = {
                 "Authorization": f"Bearer {openrouter_key}",
                 "Content-Type": "application/json"
             }
+            
+            system_instruction = "You are an expert GitHub Actions, Python, and Video Processing engineer. Help the user fix bugs and write clean code."
+            user_full_content = prompt
+            
+            if repo_context_str:
+                user_full_content += f"\n\nHere is the current code context from the user's repository:{repo_context_str}"
+
             body = {
                 "model": selected_openrouter_model,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_full_content}
+                ]
             }
-            with st.spinner("Generating response from OpenRouter..."):
+            
+            with st.spinner("Generating smart response from OpenRouter..."):
                 res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
                 if res.status_code == 200:
                     ans = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-                    st.markdown("### AI Output:")
+                    st.markdown("### 🤖 AI Code & Troubleshooting Output:")
                     st.write(ans)
                 else:
                     st.error(f"OpenRouter API Error: {res.status_code} - {res.text}")

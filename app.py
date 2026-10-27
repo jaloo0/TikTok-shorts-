@@ -228,65 +228,111 @@ with tab_edit:
                             st.error(f"Commit failed: {commit_res.text}")
 
 # ------------------------------------------
-# TAB 3: OPENROUTER AI ASSISTANT
+# TAB 3: OPENROUTER AI ASSISTANT & DIRECT PUSH EDITOR
 # ------------------------------------------
 with tab_ai:
-    st.subheader("💬 OpenRouter AI Script & Prompt Assistant")
-    st.markdown("Analyze code, troubleshoot errors, or generate script logic using your repository context and selected OpenRouter free model.")
+    st.subheader("💬 OpenRouter AI Assistant & Direct Code Patter")
+    st.markdown("Let OpenRouter AI modify your code line-by-line, review the changes, and commit/push directly to your repository.")
     
-    # Context inclusion toggle
-    include_repo_context = st.checkbox("Inject current repository files as context (pipeline.py, requirements, workflow)", value=True)
-    
-    repo_context_str = ""
-    if include_repo_context and github_token and st.session_state.owner and selected_repo and selected_repo != "Enter token first...":
+    if not github_token or not st.session_state.owner or not selected_repo or selected_repo == "Enter token first...":
+        st.warning("⚠️ Please configure your GitHub credentials in the sidebar first.")
+    else:
         gh_headers = {
             "Authorization": f"Bearer {github_token}",
             "Accept": "application/vnd.github+json"
         }
-        # Fetch key files automatically to build context
-        key_files = ["pipeline.py", "video_pipeline.yml", "requirements.txt", "requirements (1).txt", "pipeline (1).py"]
-        for f_path in key_files:
-            try:
-                f_res = requests.get(f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/contents/{f_path}", headers=gh_headers)
-                if f_res.status_code == 200:
-                    file_json = f_res.json()
-                    decoded_content = base64.b64decode(file_json["content"]).decode("utf-8")
-                    repo_context_str += f"\n\n--- FILE: {f_path} ---\n{decoded_content}"
-            except Exception:
-                pass
-
-    prompt = st.text_area("Ask OpenRouter AI or paste error logs / questions:", placeholder="e.g., Fix the moviepy import error in pipeline.py or add a feature...")
-    
-    if st.button("Generate AI Response with Context"):
-        if not openrouter_key:
-            st.error("Please enter your OpenRouter API Key in the sidebar.")
-        elif not prompt:
-            st.error("Please enter a prompt or question.")
-        else:
-            headers = {
-                "Authorization": f"Bearer {openrouter_key}",
-                "Content-Type": "application/json"
-            }
+        
+        # Fetch repository file tree for target file selection
+        tree_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/git/trees/{st.session_state.default_branch}?recursive=1"
+        tree_res = requests.get(tree_url, headers=gh_headers)
+        
+        if tree_res.status_code == 200:
+            repo_files = [item["path"] for item in tree_res.json().get("tree", []) if item["type"] == "blob"]
+            target_file = st.selectbox("Select Target File for AI Modification", options=repo_files, key="ai_target_file")
             
-            system_instruction = "You are an expert GitHub Actions, Python, and Video Processing engineer. Help the user fix bugs and write clean code."
-            user_full_content = prompt
+            file_content = ""
+            file_sha = ""
+            if target_file:
+                file_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/contents/{target_file}"
+                file_res = requests.get(file_url, headers=gh_headers)
+                if file_res.status_code == 200:
+                    f_data = file_res.json()
+                    file_sha = f_data["sha"]
+                    try:
+                        file_content = base64.b64decode(f_data["content"]).decode("utf-8")
+                    except:
+                        file_content = "[Binary file]"
             
-            if repo_context_str:
-                user_full_content += f"\n\nHere is the current code context from the user's repository:{repo_context_str}"
-
-            body = {
-                "model": selected_openrouter_model,
-                "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_full_content}
-                ]
-            }
+            ai_prompt = st.text_area("🤖 AI Instructions / Bug Fix Request", placeholder="e.g., Fix the moviepy import error, update requirements, or optimize fetch_video...")
             
-            with st.spinner("Generating smart response from OpenRouter..."):
-                res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
-                if res.status_code == 200:
-                    ans = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-                    st.markdown("### 🤖 AI Code & Troubleshooting Output:")
-                    st.write(ans)
+            # Initialize session state for AI-generated code preview
+            if "ai_generated_code" not in st.session_state:
+                st.session_state.ai_generated_code = file_content
+            
+            if st.button("✨ Generate AI Code Modification", type="primary"):
+                if not openrouter_key:
+                    st.error("Please enter your OpenRouter API Key in the sidebar.")
+                elif not ai_prompt:
+                    st.error("Please enter instructions for the AI.")
                 else:
-                    st.error(f"OpenRouter API Error: {res.status_code} - {res.text}")
+                    headers = {
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "Content-Type": "application/json"
+                    }
+                    system_instruction = (
+                        "You are an expert software engineer. The user wants you to modify the provided source code "
+                        "based on their instructions. Return ONLY the complete updated file content in raw text or wrapped in a standard code block. "
+                        "Do not include conversational filler before or after the code so it can be parsed cleanly."
+                    )
+                    user_payload = f"File Path: {target_file}\n\nCurrent Content:\n```\n{file_content}\n```\n\nInstructions: {ai_prompt}"
+                    
+                    body = {
+                        "model": selected_openrouter_model,
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": user_payload}
+                        ]
+                    }
+                    with st.spinner("AI is rewriting the code..."):
+                        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
+                        if res.status_code == 200:
+                            raw_ans = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                            
+                            # Clean up markdown code blocks if wrapped by the LLM
+                            cleaned_code = raw_ans.strip()
+                            if cleaned_code.startswith("```"):
+                                lines = cleaned_code.splitlines()
+                                if len(lines) > 2:
+                                    if lines[-1].strip() == "```":
+                                        lines = lines[1:-1]
+                                    else:
+                                        lines = lines[1:]
+                                    cleaned_code = "\n".join(lines)
+                            
+                            st.session_state.ai_generated_code = cleaned_code
+                            st.success("AI code generation complete! Review, tweak line-by-line below, and push when ready.")
+                            st.rerun()
+                        else:
+                            st.error(f"OpenRouter API Error: {res.status_code} - {res.text}")
+            
+            # Interactive Review & Line-to-Line Code Editor Box
+            st.markdown("---")
+            st.markdown("### 📝 Code Review & Line-to-Line Editor")
+            reviewed_code = st.text_area("Modify code line-by-line before committing:", value=st.session_state.ai_generated_code, height=450, key="reviewed_ai_code_box")
+            
+            commit_msg_ai = st.text_input("Commit Message", value=f"AI update to {target_file} via OpenRouter Studio")
+            
+            if st.button("🚀 Commit & Push AI Changes to GitHub", type="primary", key="push_ai_btn"):
+                encoded_content = base64.b64encode(reviewed_code.encode("utf-8")).decode("utf-8")
+                push_payload = {
+                    "message": commit_msg_ai,
+                    "content": encoded_content,
+                    "sha": file_sha,
+                    "branch": st.session_state.default_branch
+                }
+                file_url = f"https://api.github.com/repos/{st.session_state.owner}/{selected_repo}/contents/{target_file}"
+                commit_res = requests.put(file_url, headers=gh_headers, json=push_payload)
+                if commit_res.status_code in [200, 201]:
+                    st.success(f"Successfully committed and pushed `{target_file}` to GitHub!")
+                else:
+                    st.error(f"Commit failed: {commit_res.text}")
